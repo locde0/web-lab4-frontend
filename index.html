@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SkyCompute — Каталог серверів та GPU</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="navbar">
+    <div class="container nav-content">
+      <div class="brand">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+        </svg>
+        <div class="brand-text">
+          <span class="brand-title">SkyCompute</span>
+          <span class="brand-tag">Cloud & GPU Platform</span>
+        </div>
+      </div>
+
+      <div class="nav-badges">
+        <div class="status-badge" id="api-status" title="Перевірка доступності Django API">
+          <span class="status-dot"></span>
+          <span class="status-text">Підключення до API...</span>
+        </div>
+        <span class="port-badge">Frontend :3000 ⇄ API :8000</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="container main-content">
+    <!-- Hero / Info Banner -->
+    <section class="hero-banner">
+      <div class="hero-text">
+        <h1>Каталог хмарних серверних потужностей</h1>
+        <p>
+          Демонстраційний клієнт SkyCompute. Запущений на окремому порту <code>:3000</code>
+          та успішно взаємодіє з бекендом Django REST framework на <code>:8000</code> через CORS.
+        </p>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-box">
+          <span class="stat-number" id="stat-instances">—</span>
+          <span class="stat-label">Серверів</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-number" id="stat-datacenters">—</span>
+          <span class="stat-label">Датацентрів</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-number" id="stat-vendors">—</span>
+          <span class="stat-label">Вендорів</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Filters & Search Toolbar -->
+    <section class="toolbar">
+      <div class="search-box">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          type="text"
+          id="search-input"
+          placeholder="Пошук за назвою інстансу або моделлю GPU (наприклад, a100, arm)..."
+        />
+        <button id="search-clear" class="btn-clear hidden" title="Очистити">✕</button>
+      </div>
+
+      <div class="filters-row">
+        <!-- Category Pills -->
+        <div class="category-tabs" id="category-tabs">
+          <button class="tab-btn active" data-category="">Всі категорії</button>
+          <button class="tab-btn" data-category="general">General</button>
+          <button class="tab-btn" data-category="compute_optimized">Compute-Optimized</button>
+          <button class="tab-btn" data-category="accelerator_optimized">GPU / AI</button>
+        </div>
+
+        <!-- Dropdowns -->
+        <div class="select-group">
+          <select id="datacenter-select">
+            <option value="">Всі датацентри</option>
+          </select>
+
+          <select id="vendor-select">
+            <option value="">Всі вендори</option>
+          </select>
+
+          <select id="sort-select">
+            <option value="">Сортування: за замовчуванням</option>
+            <option value="price">Ціна: від найдешевших</option>
+            <option value="-price">Ціна: від найдорожчих</option>
+            <option value="-ram_gb">RAM: від найбільшого</option>
+            <option value="ram_gb">RAM: від найменшого</option>
+          </select>
+
+          <button id="reset-filters" class="btn btn-secondary">Скинути</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Catalog Results Section -->
+    <section class="catalog-section">
+      <div class="results-meta">
+        <span id="results-count" class="results-text">Завантаження каталогу...</span>
+        <span id="active-filters-info" class="active-filters-text"></span>
+      </div>
+
+      <!-- Loading State -->
+      <div id="loading-spinner" class="spinner-container">
+        <div class="spinner"></div>
+        <p>Отримання даних через CORS із <code>http://127.0.0.1:8000/api/v1/instances</code>...</p>
+      </div>
+
+      <!-- Error Message Box -->
+      <div id="error-box" class="error-box hidden">
+        <div class="error-header">
+          <span class="error-badge" id="error-status">ERROR</span>
+          <span class="error-code" id="error-code"></span>
+        </div>
+        <p class="error-message" id="error-message"></p>
+        <pre class="error-details" id="error-details"></pre>
+        <button id="retry-btn" class="btn btn-primary">Повторити спробу</button>
+      </div>
+
+      <!-- Instances Grid -->
+      <div id="instances-grid" class="instances-grid"></div>
+
+      <!-- Empty State -->
+      <div id="empty-state" class="empty-state hidden">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+          <line x1="6" y1="6" x2="6.01" y2="6"></line>
+          <line x1="6" y1="18" x2="6.01" y2="18"></line>
+        </svg>
+        <h3>За вашим запитом серверів не знайдено</h3>
+        <p>Спробуйте змінити пошуковий запит або скинути фільтри.</p>
+        <button id="empty-reset-btn" class="btn btn-secondary">Скинути всі фільтри</button>
+      </div>
+
+      <!-- Pagination -->
+      <div id="pagination" class="pagination hidden">
+        <button id="prev-page" class="btn btn-secondary" disabled>← Попередня</button>
+        <span id="page-info" class="page-info">Сторінка 1</span>
+        <button id="next-page" class="btn btn-secondary">Наступна →</button>
+      </div>
+    </section>
+
+    <!-- Interactive CORS & Error-Handling Demo -->
+    <section class="demo-section">
+      <div class="demo-card">
+        <div class="demo-header">
+          <div>
+            <h2>🧪 Демонстрація CORS та єдиного формату помилок</h2>
+            <p>
+              Натисніть кнопку нижче, щоб відправити запит до бекенду і наживо побачити,
+              як спрацьовує CORS та як бекенд повертає структуровану помилку:
+            </p>
+          </div>
+        </div>
+
+        <div class="demo-actions">
+          <button class="btn btn-demo" data-demo="conflict">
+            <span class="demo-pill pill-409">409 Conflict</span>
+            Видалення датацентру із серверами
+          </button>
+          <button class="btn btn-demo" data-demo="validation">
+            <span class="demo-pill pill-400">400 Bad Request</span>
+            Невалідні дані (SLA &gt; 100)
+          </button>
+          <button class="btn btn-demo" data-demo="notfound">
+            <span class="demo-pill pill-404">404 Not Found</span>
+            Неіснуючий сервер (id=9999)
+          </button>
+        </div>
+
+        <div id="demo-output-container" class="demo-output-container hidden">
+          <div class="demo-output-header">
+            <span id="demo-request-info" class="request-tag"></span>
+            <span id="demo-status-pill" class="status-tag"></span>
+          </div>
+          <pre id="demo-response-json" class="json-viewer"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Instance Detail Modal -->
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <span class="modal-tag" id="modal-category"></span>
+          <h2 id="modal-name">Instance Name</h2>
+        </div>
+        <button id="modal-close" class="modal-close-btn" title="Закрити">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <p id="modal-description" class="modal-description"></p>
+
+        <h4 class="specs-title">Апаратна конфігурація</h4>
+        <div class="modal-specs-grid">
+          <div class="spec-tile">
+            <span class="spec-name">vCPU</span>
+            <span class="spec-value" id="modal-vcpu"></span>
+          </div>
+          <div class="spec-tile">
+            <span class="spec-name">RAM</span>
+            <span class="spec-value" id="modal-ram"></span>
+          </div>
+          <div class="spec-tile">
+            <span class="spec-name">Прискорювач (GPU/TPU)</span>
+            <span class="spec-value" id="modal-gpu"></span>
+          </div>
+          <div class="spec-tile">
+            <span class="spec-name">Накопичувач</span>
+            <span class="spec-value" id="modal-storage"></span>
+          </div>
+          <div class="spec-tile">
+            <span class="spec-name">Мережа</span>
+            <span class="spec-value" id="modal-network"></span>
+          </div>
+          <div class="spec-tile">
+            <span class="spec-name">Вартість</span>
+            <span class="spec-value price-highlight" id="modal-price"></span>
+          </div>
+        </div>
+
+        <h4 class="specs-title">Локація та Архітектура</h4>
+        <div class="modal-infra-grid">
+          <div class="infra-card">
+            <span class="infra-subtitle">Датацентр</span>
+            <span class="infra-title" id="modal-dc-name"></span>
+            <span class="infra-detail" id="modal-dc-location"></span>
+          </div>
+          <div class="infra-card">
+            <span class="infra-subtitle">Вендор заліза</span>
+            <span class="infra-title" id="modal-vendor-name"></span>
+            <span class="infra-detail" id="modal-vendor-arch"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <span class="availability-status" id="modal-availability"></span>
+        <button id="modal-close-footer" class="btn btn-secondary">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-content">
+      <p>SkyCompute Cloud Services • Лабораторна робота №4 НаУКМА</p>
+      <div class="footer-links">
+        <a href="http://127.0.0.1:8000/api/v1/instances" target="_blank" rel="noreferrer">Django API (:8000)</a>
+        <a href="http://127.0.0.1:8000/admin/" target="_blank" rel="noreferrer">Admin Panel</a>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

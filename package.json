@@ -1,0 +1,16 @@
+{
+  "name": "skycompute-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SkyCompute Cloud & GPU Rental Platform — Frontend Client",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 3000",
+    "build": "vite build",
+    "preview": "vite preview --port 3000",
+    "start": "vite --port 3000"
+  },
+  "devDependencies": {
+    "vite": "^8.3.5"
+  }
+}
