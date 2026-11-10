@@ -1,232 +1,900 @@
 /**
  * SkyCompute — Frontend Client
- * Demonstrates cross-origin resource sharing (CORS) with Django REST framework
- * running on http://127.0.0.1:8000/api/v1/
+ * Implements SPA routing, registration, JWT login/logout, role-based pages,
+ * and automatic access token refresh via the refresh token.
  */
 
-const API_BASE = 'http://127.0.0.1:8000/api/v1';
+const API_BASE = "http://127.0.0.1:8000/api/v1";
 
-// Application State
+const STORAGE_KEYS = {
+  access: "skycompute_access_token",
+  refresh: "skycompute_refresh_token",
+  user: "skycompute_user",
+};
+
 const state = {
-  search: '',
-  category: '',
-  datacenter_id: '',
-  vendor_id: '',
-  sort: '',
+  search: "",
+  category: "",
+  datacenter_id: "",
+  vendor_id: "",
+  sort: "",
   page: 1,
   limit: 6,
   total: 0,
+  datacenters: [],
+  vendors: [],
+  redirectAfterLogin: null,
 };
 
-// DOM Elements
-const elements = {
-  apiStatus: document.getElementById('api-status'),
-  statInstances: document.getElementById('stat-instances'),
-  statDatacenters: document.getElementById('stat-datacenters'),
-  statVendors: document.getElementById('stat-vendors'),
-  searchInput: document.getElementById('search-input'),
-  searchClear: document.getElementById('search-clear'),
-  categoryTabs: document.getElementById('category-tabs'),
-  datacenterSelect: document.getElementById('datacenter-select'),
-  vendorSelect: document.getElementById('vendor-select'),
-  sortSelect: document.getElementById('sort-select'),
-  resetFilters: document.getElementById('reset-filters'),
-  resultsCount: document.getElementById('results-count'),
-  activeFiltersInfo: document.getElementById('active-filters-info'),
-  instancesGrid: document.getElementById('instances-grid'),
-  loadingSpinner: document.getElementById('loading-spinner'),
-  emptyState: document.getElementById('empty-state'),
-  emptyResetBtn: document.getElementById('empty-reset-btn'),
-  errorBox: document.getElementById('error-box'),
-  errorStatus: document.getElementById('error-status'),
-  errorCode: document.getElementById('error-code'),
-  errorMessage: document.getElementById('error-message'),
-  errorDetails: document.getElementById('error-details'),
-  retryBtn: document.getElementById('retry-btn'),
-  pagination: document.getElementById('pagination'),
-  prevPage: document.getElementById('prev-page'),
-  nextPage: document.getElementById('next-page'),
-  pageInfo: document.getElementById('page-info'),
-  // Modal
-  modalBackdrop: document.getElementById('modal-backdrop'),
-  modalClose: document.getElementById('modal-close'),
-  modalCloseFooter: document.getElementById('modal-close-footer'),
-  modalCategory: document.getElementById('modal-category'),
-  modalName: document.getElementById('modal-name'),
-  modalDescription: document.getElementById('modal-description'),
-  modalVcpu: document.getElementById('modal-vcpu'),
-  modalRam: document.getElementById('modal-ram'),
-  modalGpu: document.getElementById('modal-gpu'),
-  modalStorage: document.getElementById('modal-storage'),
-  modalNetwork: document.getElementById('modal-network'),
-  modalPrice: document.getElementById('modal-price'),
-  modalDcName: document.getElementById('modal-dc-name'),
-  modalDcLocation: document.getElementById('modal-dc-location'),
-  modalVendorName: document.getElementById('modal-vendor-name'),
-  modalVendorArch: document.getElementById('modal-vendor-arch'),
-  modalAvailability: document.getElementById('modal-availability'),
-  // Demo
-  demoOutputContainer: document.getElementById('demo-output-container'),
-  demoRequestInfo: document.getElementById('demo-request-info'),
-  demoStatusPill: document.getElementById('demo-status-pill'),
-  demoResponseJson: document.getElementById('demo-response-json'),
-};
-
-// Category human labels
 const categoryLabels = {
-  general: 'General-Purpose',
-  compute_optimized: 'Compute-Optimized',
-  accelerator_optimized: 'Accelerator / GPU',
+  general: "General-Purpose",
+  compute_optimized: "Compute-Optimized",
+  accelerator_optimized: "Accelerator / GPU",
 };
 
-// --- API Helpers -----------------------------------------------------------
+// --- Token & Session Storage -----------------------------------------------
+
+function getAccessToken() {
+  return localStorage.getItem(STORAGE_KEYS.access);
+}
+
+function getRefreshToken() {
+  return localStorage.getItem(STORAGE_KEYS.refresh);
+}
+
+function getCurrentUser() {
+  const raw = localStorage.getItem(STORAGE_KEYS.user);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function isAuthenticated() {
+  return Boolean(getAccessToken() || getRefreshToken());
+}
+
+function setAuthSession(access, refresh, user) {
+  if (access) localStorage.setItem(STORAGE_KEYS.access, access);
+  if (refresh) localStorage.setItem(STORAGE_KEYS.refresh, refresh);
+  if (user) localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
+  updateNavbarAuthUI();
+  updateTokenPreviewUI();
+}
+
+function clearAuthSession() {
+  localStorage.removeItem(STORAGE_KEYS.access);
+  localStorage.removeItem(STORAGE_KEYS.refresh);
+  localStorage.removeItem(STORAGE_KEYS.user);
+  updateNavbarAuthUI();
+  updateTokenPreviewUI();
+}
+
+function parseJwtPayload(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(base64));
+  } catch {
+    return null;
+  }
+}
+
+function isJwtExpired(token) {
+  const payload = parseJwtPayload(token);
+  if (!payload || !payload.exp) return true;
+  // Refresh if token expires within 5 seconds
+  return payload.exp * 1000 <= Date.now() + 5000;
+}
+
+// --- API Client with Automatic Token Refresh -------------------------------
+
+let refreshPromise = null;
+
+async function refreshAccessToken() {
+  const refresh = getRefreshToken();
+  if (!refresh) return null;
+
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE}/auth/refresh`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          refresh
+        }),
+      });
+      const data = await response.json();
+      if (response.ok && data.access) {
+        localStorage.setItem(STORAGE_KEYS.access, data.access);
+        updateTokenPreviewUI();
+        return data.access;
+      }
+      clearAuthSession();
+      return null;
+    } catch {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
 
 async function apiRequest(endpoint, options = {}) {
-  const url = `${API_BASE}${endpoint}`;
-  const response = await fetch(url, {
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-    ...options,
+  const {
+    auth = false, ...fetchOptions
+  } = options;
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...(fetchOptions.headers || {}),
+  };
+
+  let refreshedAutomatically = false;
+
+  if (auth) {
+    let access = getAccessToken();
+    if ((!access || isJwtExpired(access)) && getRefreshToken()) {
+      const newAccess = await refreshAccessToken();
+      if (newAccess) {
+        access = newAccess;
+        refreshedAutomatically = true;
+      }
+    }
+    if (access) {
+      headers.Authorization = `Bearer ${access}`;
+    }
+  }
+
+  let response = await fetch(`${API_BASE}${endpoint}`, {
+    ...fetchOptions,
+    headers,
   });
 
-  const isJson = response.headers.get('content-type')?.includes('application/json');
+  // If the server returned 401 and we have a refresh token, refresh and retry once
+  if (auth && response.status === 401 && getRefreshToken()) {
+    const newAccess = await refreshAccessToken();
+    if (newAccess) {
+      refreshedAutomatically = true;
+      headers.Authorization = `Bearer ${newAccess}`;
+      response = await fetch(`${API_BASE}${endpoint}`, {
+        ...fetchOptions,
+        headers,
+      });
+    }
+  }
+
+  const isJson = response.headers
+    .get("content-type")
+    ?.includes("application/json");
   const data = isJson ? await response.json() : null;
 
   return {
     ok: response.ok,
     status: response.status,
     data,
+    refreshedAutomatically,
   };
 }
 
-// --- Status & Statistics ----------------------------------------------------
+// --- UI Banner & Navbar Updates --------------------------------------------
+
+function showRouteBanner(message) {
+  const banner = document.getElementById("route-banner");
+  const text = document.getElementById("route-banner-text");
+  text.textContent = message;
+  banner.classList.remove("hidden");
+}
+
+function hideRouteBanner() {
+  document.getElementById("route-banner").classList.add("hidden");
+}
+
+function formatUserDisplayName(user) {
+  if (!user) return "";
+  const fullName = [user.first_name, user.last_name]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return fullName ? `${fullName} (@${user.username})` : `@${user.username}`;
+}
+
+function updateNavbarAuthUI() {
+  const guestBox = document.getElementById("nav-guest");
+  const userBox = document.getElementById("nav-user");
+  const nameEl = document.getElementById("nav-user-name");
+  const roleEl = document.getElementById("nav-user-role");
+
+  const user = getCurrentUser();
+  if (isAuthenticated() && user) {
+    guestBox.classList.add("hidden");
+    userBox.classList.remove("hidden");
+    nameEl.textContent = formatUserDisplayName(user);
+    roleEl.textContent = user.role === "admin" ? "admin" : "user";
+    roleEl.className =
+      user.role === "admin" ? "role-badge role-admin" : "role-badge";
+  } else {
+    guestBox.classList.remove("hidden");
+    userBox.classList.add("hidden");
+    nameEl.textContent = "";
+    roleEl.textContent = "";
+  }
+}
+
+function updateTokenPreviewUI() {
+  const accessEl = document.getElementById("token-access-preview");
+  const refreshEl = document.getElementById("token-refresh-preview");
+  if (!accessEl || !refreshEl) return;
+
+  const access = getAccessToken();
+  const refresh = getRefreshToken();
+  accessEl.textContent = access ?
+    `${access.slice(0, 28)}...${access.slice(-12)}` :
+    "відсутній";
+  refreshEl.textContent = refresh ?
+    `${refresh.slice(0, 28)}...${refresh.slice(-12)}` :
+    "відсутній";
+}
+
+// --- Client-Side Router with Auth Guards -----------------------------------
+
+const ROUTES = {
+  "/": "page-catalog",
+  "/catalog": "page-catalog",
+  "/login": "page-login",
+  "/register": "page-register",
+  "/workspace": "page-workspace",
+  "/admin-panel": "page-admin",
+};
+
+const PROTECTED_ROUTES = new Set(["/workspace", "/admin-panel"]);
+const GUEST_ONLY_ROUTES = new Set(["/login", "/register"]);
+
+function normalizePath(rawPath) {
+  const path = (rawPath || "/catalog").split("?")[0];
+  if (path === "/" || !ROUTES[path]) return "/catalog";
+  return path;
+}
+
+async function navigateTo(targetUrl, {
+  replace = false,
+  banner = null
+} = {}) {
+  const urlObj = new URL(targetUrl, window.location.origin);
+  const path = normalizePath(urlObj.pathname);
+
+  // Rule 1: Unauthenticated user opening a protected route -> redirect to /login
+  if (PROTECTED_ROUTES.has(path) && !isAuthenticated()) {
+    state.redirectAfterLogin = path;
+    const loginUrl = `/login?next=${encodeURIComponent(path)}`;
+    window.history.replaceState({}, "", loginUrl);
+    renderRoute("/login");
+    showRouteBanner(
+      `Сторінка «${path}» доступна лише авторизованим користувачам. Увійдіть в акаунт — після входу вас автоматично поверне на «${path}».`
+    );
+    return;
+  }
+
+  // Rule 2: Authenticated user trying to open /login or /register -> redirect to content page
+  if (GUEST_ONLY_ROUTES.has(path) && isAuthenticated()) {
+    window.history.replaceState({}, "", "/workspace");
+    renderRoute("/workspace");
+    showRouteBanner(
+      "Ви вже авторизовані, тому сторінка входу недоступна — вас перенаправлено до кабінету."
+    );
+    return;
+  }
+
+  if (replace) {
+    window.history.replaceState({}, "", urlObj.pathname + urlObj.search);
+  } else if (window.location.pathname + window.location.search !== urlObj.pathname + urlObj.search) {
+    window.history.pushState({}, "", urlObj.pathname + urlObj.search);
+  }
+
+  if (banner) {
+    showRouteBanner(banner);
+  } else {
+    hideRouteBanner();
+  }
+
+  await renderRoute(path);
+}
+
+async function renderRoute(path) {
+  Object.values(ROUTES).forEach((pageId) => {
+    document.getElementById(pageId)?.classList.add("hidden");
+  });
+
+  const activePageId = ROUTES[path] || "page-catalog";
+  document.getElementById(activePageId)?.classList.remove("hidden");
+
+  document.querySelectorAll(".main-nav .nav-link").forEach((link) => {
+    link.classList.toggle("active", link.dataset.route === path);
+  });
+
+  if (path === "/login") {
+    const nextParam =
+      new URLSearchParams(window.location.search).get("next") ||
+      state.redirectAfterLogin;
+    const hint = document.getElementById("login-redirect-hint");
+    if (nextParam) {
+      hint.textContent = `Після успішного входу вас буде автоматично перенаправлено на сторінку «${nextParam}».`;
+    } else {
+      hint.textContent =
+        "Увійдіть, щоб керувати серверами та переглядати особистий кабінет.";
+    }
+  } else if (path === "/workspace") {
+    updateTokenPreviewUI();
+    await loadCurrentUserProfile();
+  } else if (path === "/admin-panel") {
+    await renderAdminPanel();
+  }
+}
+
+// --- Registration & Login Forms --------------------------------------------
+
+function clearFormErrors(form) {
+  form.querySelectorAll(".field-error").forEach((el) => {
+    el.textContent = "";
+  });
+}
+
+function showFieldErrors(prefix, details) {
+  if (!details || typeof details !== "object") return;
+  const fieldMap = {
+    username: `${prefix}-username`,
+    email: `${prefix}-email`,
+    first_name: `${prefix}-first-name`,
+    last_name: `${prefix}-last-name`,
+    password: `${prefix}-password`,
+    password_confirmation: `${prefix}-password-confirm`,
+  };
+  Object.entries(details).forEach(([field, messages]) => {
+    const targetId = fieldMap[field];
+    if (!targetId) return;
+    const errEl = document.querySelector(`[data-error-for="${targetId}"]`);
+    if (errEl) {
+      errEl.textContent = Array.isArray(messages) ?
+        messages.join(" ") :
+        String(messages);
+    }
+  });
+}
+
+function setupAuthForms() {
+  const loginForm = document.getElementById("login-form");
+  const loginAlert = document.getElementById("login-error-alert");
+
+  document.getElementById("fill-user-btn").addEventListener("click", () => {
+    document.getElementById("login-username").value = "developer";
+    document.getElementById("login-password").value = "DevPass123!";
+  });
+
+  document.getElementById("fill-admin-btn").addEventListener("click", () => {
+    document.getElementById("login-username").value = "admin";
+    document.getElementById("login-password").value = "AdminPass123!";
+  });
+
+  loginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearFormErrors(loginForm);
+    loginAlert.classList.add("hidden");
+
+    const username = document.getElementById("login-username").value.trim();
+    const password = document.getElementById("login-password").value;
+
+    try {
+      const res = await apiRequest("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username,
+          password
+        }),
+      });
+
+      if (res.ok) {
+        setAuthSession(res.data.access, res.data.refresh, res.data.user);
+        loginForm.reset();
+
+        const nextUrl =
+          new URLSearchParams(window.location.search).get("next") ||
+          state.redirectAfterLogin ||
+          "/workspace";
+        state.redirectAfterLogin = null;
+        await navigateTo(nextUrl, {
+          replace: true,
+          banner: `Вітаємо, ${formatUserDisplayName(res.data.user)}! Ви успішно увійшли в акаунт.`,
+        });
+      } else {
+        const err = res.data?.error;
+        showFieldErrors("login", err?.details);
+        loginAlert.textContent =
+          err?.message || "Не вдалося виконати вхід. Перевірте облікові дані.";
+        loginAlert.classList.remove("hidden");
+      }
+    } catch {
+      loginAlert.textContent =
+        "Сервер API недоступний. Переконайтеся, що Django запущено на порту 8000.";
+      loginAlert.classList.remove("hidden");
+    }
+  });
+
+  // Registration Form
+  const registerForm = document.getElementById("register-form");
+  const registerError = document.getElementById("register-error-alert");
+  const registerSuccess = document.getElementById("register-success-alert");
+
+  registerForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearFormErrors(registerForm);
+    registerError.classList.add("hidden");
+    registerSuccess.classList.add("hidden");
+
+    const payload = {
+      username: document.getElementById("reg-username").value.trim(),
+      first_name: document.getElementById("reg-first-name").value.trim(),
+      last_name: document.getElementById("reg-last-name").value.trim(),
+      email: document.getElementById("reg-email").value.trim(),
+      password: document.getElementById("reg-password").value,
+      password_confirmation: document.getElementById("reg-password-confirm").value,
+    };
+
+    try {
+      const res = await apiRequest("/auth/register", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        // Automatically log the newly registered user in
+        const loginRes = await apiRequest("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({
+            username: payload.username,
+            password: payload.password,
+          }),
+        });
+        registerForm.reset();
+        if (loginRes.ok) {
+          setAuthSession(
+            loginRes.data.access,
+            loginRes.data.refresh,
+            loginRes.data.user
+          );
+          await navigateTo("/workspace", {
+            replace: true,
+            banner: `Акаунт @${payload.username} успішно зареєстровано! Пароль збережено у захешованому вигляді.`,
+          });
+        } else {
+          await navigateTo("/login", {
+            banner: "Реєстрація успішна! Тепер увійдіть у свій акаунт.",
+          });
+        }
+      } else {
+        const err = res.data?.error;
+        showFieldErrors("reg", err?.details);
+        registerError.textContent =
+          err?.message || "Виправте помилки у формі реєстрації.";
+        registerError.classList.remove("hidden");
+      }
+    } catch {
+      registerError.textContent =
+        "Не вдалося з'єднатися з сервером API (:8000).";
+      registerError.classList.remove("hidden");
+    }
+  });
+
+  // Logout Button
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    clearAuthSession();
+    const currentPath = normalizePath(window.location.pathname);
+    if (PROTECTED_ROUTES.has(currentPath)) {
+      await navigateTo("/login", {
+        replace: true,
+        banner: "Ви вийшли з акаунта. Токени видалено з браузера.",
+      });
+    } else {
+      showRouteBanner("Ви вийшли з акаунта. Токени видалено з браузера.");
+    }
+  });
+}
+
+// --- Protected Workspace: Profile, Token Refresh & Create Instance ---------
+
+async function loadCurrentUserProfile() {
+  const res = await apiRequest("/users/me", {
+    auth: true
+  });
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearAuthSession();
+      await navigateTo("/login?next=/workspace", {
+        replace: true,
+        banner: "Сесія завершилась. Будь ласка, увійдіть повторно.",
+      });
+    }
+    return;
+  }
+
+  const user = res.data;
+  localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
+  updateNavbarAuthUI();
+
+  document.getElementById("prof-username-role").value =
+    `@${user.username} — роль: ${user.role} (${user.is_staff ? "Адміністратор" : "Розробник"})`;
+  document.getElementById("prof-email").value = user.email || "";
+  document.getElementById("prof-first-name").value = user.first_name || "";
+  document.getElementById("prof-last-name").value = user.last_name || "";
+}
+
+function setupWorkspaceActions() {
+  const profileForm = document.getElementById("profile-form");
+  const profileAlert = document.getElementById("profile-alert");
+
+  profileForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    profileAlert.classList.add("hidden");
+
+    const payload = {
+      email: document.getElementById("prof-email").value.trim(),
+      first_name: document.getElementById("prof-first-name").value.trim(),
+      last_name: document.getElementById("prof-last-name").value.trim(),
+    };
+
+    const res = await apiRequest("/users/me", {
+      method: "PATCH",
+      auth: true,
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(res.data));
+      updateNavbarAuthUI();
+      profileAlert.className = "form-alert alert-success";
+      profileAlert.textContent = "Профіль успішно оновлено!";
+      profileAlert.classList.remove("hidden");
+    } else {
+      const err = res.data?.error;
+      profileAlert.className = "form-alert alert-error";
+      profileAlert.textContent = err?.message || "Помилка оновлення профілю.";
+      profileAlert.classList.remove("hidden");
+    }
+  });
+
+  // Simulate Expired Access Token + Auto Refresh
+  const logOutput = document.getElementById("refresh-log-output");
+
+  document
+    .getElementById("simulate-expired-access-btn")
+    .addEventListener("click", async () => {
+      const steps = [];
+      steps.push("1. Підміняємо поточний access-токен на прострочений у localStorage...");
+      localStorage.setItem(STORAGE_KEYS.access, "expired.access.token");
+      updateTokenPreviewUI();
+
+      steps.push("2. Виконуємо захищений запит GET /api/v1/users/me...");
+      const res = await apiRequest("/users/me", {
+        auth: true
+      });
+
+      if (res.ok && res.refreshedAutomatically) {
+        steps.push(
+          "3. Перехоплено закінчення дії access-токена → автоматично викликано POST /api/v1/auth/refresh із refresh-токеном (200 OK)."
+        );
+        steps.push(
+          `4. Отримано новий access-токен і повторено запит GET /api/v1/users/me → статус ${res.status} OK!`
+        );
+        steps.push(
+          `5. Дані користувача отримано без повторного логіну: @${res.data.username} (${res.data.email})`
+        );
+      } else {
+        steps.push(`Запит завершився зі статусом ${res.status}.`);
+      }
+
+      logOutput.textContent = steps.join("\n");
+    });
+
+  document
+    .getElementById("manual-refresh-btn")
+    .addEventListener("click", async () => {
+      const newAccess = await refreshAccessToken();
+      if (newAccess) {
+        logOutput.textContent = `POST /api/v1/auth/refresh → 200 OK\nНовий access-токен успішно збережено:\n${newAccess}`;
+      } else {
+        logOutput.textContent =
+          "Не вдалося оновити токен (refresh-токен відсутній або недійсний).";
+      }
+    });
+
+  // Create Instance Form
+  const createForm = document.getElementById("create-instance-form");
+  const createAlert = document.getElementById("create-instance-alert");
+
+  createForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    createAlert.classList.add("hidden");
+
+    const gpuModelRaw = document.getElementById("inst-gpu-model").value.trim();
+    const payload = {
+      name: document.getElementById("inst-name").value.trim(),
+      category: document.getElementById("inst-category").value,
+      description: document.getElementById("inst-description").value.trim(),
+      vcpu: Number(document.getElementById("inst-vcpu").value),
+      ram_gb: Number(document.getElementById("inst-ram").value),
+      gpu_model: gpuModelRaw || null,
+      gpu_count: Number(document.getElementById("inst-gpu-count").value || 0),
+      storage_type: document.getElementById("inst-storage-type").value,
+      storage_size_gb: Number(document.getElementById("inst-storage-size").value),
+      network_bandwidth_gbps: Number(
+        document.getElementById("inst-bandwidth").value
+      ),
+      hourly_price: document.getElementById("inst-price").value,
+      datacenter_id: Number(document.getElementById("inst-datacenter").value),
+      vendor_id: Number(document.getElementById("inst-vendor").value),
+    };
+
+    const res = await apiRequest("/instances", {
+      method: "POST",
+      auth: true,
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      createAlert.className = "form-alert alert-success";
+      createAlert.textContent = `Сервер «${res.data.name}» (id=${res.data.id}) успішно створено!`;
+      createAlert.classList.remove("hidden");
+      createForm.reset();
+      await loadInstances();
+    } else {
+      const err = res.data?.error;
+      const detailsText = err?.details ?
+        " " + JSON.stringify(err.details) :
+        "";
+      createAlert.className = "form-alert alert-error";
+      createAlert.textContent = `${err?.message || "Помилка створення сервера."}${detailsText}`;
+      createAlert.classList.remove("hidden");
+    }
+  });
+}
+
+// --- Admin Infrastructure Panel --------------------------------------------
+
+async function renderAdminPanel() {
+  const user = getCurrentUser();
+  const roleNotice = document.getElementById("admin-role-notice");
+  if (user?.is_staff) {
+    roleNotice.className = "form-alert alert-success";
+    roleNotice.textContent = `Ви увійшли як адміністратор (@${user.username}, role=admin). Вам доступні всі операції керування датацентрами та видалення серверів.`;
+  } else {
+    roleNotice.className = "form-alert alert-error";
+    roleNotice.textContent = `Ви увійшли зі звичайною роллю (@${user?.username || "user"}, role=user). Спроба створити датацентр або видалити сервер поверне статус 403 Forbidden від бекенду.`;
+  }
+  roleNotice.classList.remove("hidden");
+
+  const listEl = document.getElementById("admin-instances-list");
+  const res = await apiRequest("/instances?limit=20");
+  if (!res.ok) return;
+
+  listEl.innerHTML = res.data.results
+    .map(
+      (inst) => `
+      <div class="admin-list-item">
+        <div class="admin-item-info">
+          <strong>${escapeHtml(inst.name)}</strong>
+          <span>ID: ${inst.id} • ${inst.vcpu} vCPU / ${inst.ram_gb} GB RAM • $${inst.hourly_price}/год</span>
+        </div>
+        <button type="button" class="btn btn-danger-outline btn-sm btn-delete-instance" data-id="${inst.id}" data-name="${escapeHtml(inst.name)}">
+          Видалити (DELETE)
+        </button>
+      </div>
+    `
+    )
+    .join("");
+
+  const deleteAlert = document.getElementById("admin-delete-alert");
+  listEl.querySelectorAll(".btn-delete-instance").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      deleteAlert.classList.add("hidden");
+      const id = btn.dataset.id;
+      const name = btn.dataset.name;
+      const delRes = await apiRequest(`/instances/${id}`, {
+        method: "DELETE",
+        auth: true,
+      });
+
+      if (delRes.status === 204) {
+        deleteAlert.className = "form-alert alert-success";
+        deleteAlert.textContent = `Сервер «${name}» (id=${id}) успішно видалено (204 No Content).`;
+        deleteAlert.classList.remove("hidden");
+        await renderAdminPanel();
+        await loadInstances();
+      } else {
+        deleteAlert.className = "form-alert alert-error";
+        deleteAlert.textContent = `HTTP ${delRes.status}: ${delRes.data?.error?.message || "Помилка видалення."}`;
+        deleteAlert.classList.remove("hidden");
+      }
+    });
+  });
+}
+
+function setupAdminForm() {
+  const dcForm = document.getElementById("admin-dc-form");
+  const dcAlert = document.getElementById("admin-dc-alert");
+
+  dcForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    dcAlert.classList.add("hidden");
+
+    const payload = {
+      name: document.getElementById("dc-name").value.trim(),
+      region_code: document.getElementById("dc-region").value.trim(),
+      city: document.getElementById("dc-city").value.trim(),
+      country: document.getElementById("dc-country").value.trim(),
+      sla_percent: "99.99",
+    };
+
+    const res = await apiRequest("/datacenters", {
+      method: "POST",
+      auth: true,
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      dcAlert.className = "form-alert alert-success";
+      dcAlert.textContent = `Датацентр «${res.data.name}» (${res.data.city}) успішно створено!`;
+      dcAlert.classList.remove("hidden");
+      dcForm.reset();
+      await loadMetadata();
+    } else {
+      dcAlert.className = "form-alert alert-error";
+      dcAlert.textContent = `HTTP ${res.status}: ${res.data?.error?.message || "Відмовлено в доступі."}`;
+      dcAlert.classList.remove("hidden");
+    }
+  });
+}
+
+// --- Public Catalog Logic --------------------------------------------------
 
 async function checkApiConnection() {
+  const apiStatus = document.getElementById("api-status");
   try {
-    const res = await apiRequest('/instances?limit=1');
+    const res = await apiRequest("/instances?limit=1");
     if (res.ok) {
-      elements.apiStatus.className = 'status-badge connected';
-      elements.apiStatus.querySelector('.status-text').textContent = 'API Підключено (CORS 200 OK)';
+      apiStatus.className = "status-badge connected";
+      apiStatus.querySelector(".status-text").textContent = "API 200 OK";
     } else {
-      elements.apiStatus.className = 'status-badge error';
-      elements.apiStatus.querySelector('.status-text').textContent = `Помилка API (${res.status})`;
+      apiStatus.className = "status-badge error";
+      apiStatus.querySelector(".status-text").textContent = `API (${res.status})`;
     }
-  } catch (err) {
-    elements.apiStatus.className = 'status-badge error';
-    elements.apiStatus.querySelector('.status-text').textContent = 'API недоступне (:8000)';
+  } catch {
+    apiStatus.className = "status-badge error";
+    apiStatus.querySelector(".status-text").textContent = "API недоступне";
   }
 }
 
 async function loadMetadata() {
   try {
     const [dcRes, vendorRes] = await Promise.all([
-      apiRequest('/datacenters'),
-      apiRequest('/vendors'),
+      apiRequest("/datacenters"),
+      apiRequest("/vendors"),
     ]);
 
+    const dcSelect = document.getElementById("datacenter-select");
+    const instDcSelect = document.getElementById("inst-datacenter");
     if (dcRes.ok && Array.isArray(dcRes.data)) {
-      elements.statDatacenters.textContent = dcRes.data.length;
+      state.datacenters = dcRes.data;
+      document.getElementById("stat-datacenters").textContent = dcRes.data.length;
+      dcSelect.innerHTML = '<option value="">Всі датацентри</option>';
+      instDcSelect.innerHTML = "";
       dcRes.data.forEach((dc) => {
-        const opt = document.createElement('option');
+        const opt = document.createElement("option");
         opt.value = dc.id;
         opt.textContent = `${dc.city} (${dc.name})`;
-        elements.datacenterSelect.appendChild(opt);
+        dcSelect.appendChild(opt);
+        instDcSelect.appendChild(opt.cloneNode(true));
       });
     }
 
+    const vendorSelect = document.getElementById("vendor-select");
+    const instVendorSelect = document.getElementById("inst-vendor");
     if (vendorRes.ok && Array.isArray(vendorRes.data)) {
-      elements.statVendors.textContent = vendorRes.data.length;
+      state.vendors = vendorRes.data;
+      document.getElementById("stat-vendors").textContent = vendorRes.data.length;
+      vendorSelect.innerHTML = '<option value="">Всі вендори</option>';
+      instVendorSelect.innerHTML = "";
       vendorRes.data.forEach((v) => {
-        const opt = document.createElement('option');
+        const opt = document.createElement("option");
         opt.value = v.id;
         opt.textContent = v.name;
-        elements.vendorSelect.appendChild(opt);
+        vendorSelect.appendChild(opt);
+        instVendorSelect.appendChild(opt.cloneNode(true));
       });
     }
   } catch (e) {
-    console.error('Failed to load metadata:', e);
+    console.error("Failed to load metadata:", e);
   }
 }
 
-// --- Fetch & Render Instances -----------------------------------------------
-
 async function loadInstances() {
-  showLoading(true);
-  hideError();
-  elements.emptyState.classList.add('hidden');
-  elements.instancesGrid.innerHTML = '';
+  const spinner = document.getElementById("loading-spinner");
+  const grid = document.getElementById("instances-grid");
+  const emptyState = document.getElementById("empty-state");
+  const errorBox = document.getElementById("error-box");
+
+  spinner.classList.remove("hidden");
+  grid.classList.add("hidden");
+  errorBox.classList.add("hidden");
+  emptyState.classList.add("hidden");
 
   const params = new URLSearchParams();
-  if (state.search.trim()) params.append('search', state.search.trim());
-  if (state.category) params.append('category', state.category);
-  if (state.datacenter_id) params.append('datacenter_id', state.datacenter_id);
-  if (state.vendor_id) params.append('vendor_id', state.vendor_id);
-  if (state.sort) params.append('sort', state.sort);
-  params.append('page', state.page);
-  params.append('limit', state.limit);
+  if (state.search.trim()) params.append("search", state.search.trim());
+  if (state.category) params.append("category", state.category);
+  if (state.datacenter_id) params.append("datacenter_id", state.datacenter_id);
+  if (state.vendor_id) params.append("vendor_id", state.vendor_id);
+  if (state.sort) params.append("sort", state.sort);
+  params.append("page", state.page);
+  params.append("limit", state.limit);
 
   try {
     const res = await apiRequest(`/instances?${params.toString()}`);
-    showLoading(false);
+    spinner.classList.add("hidden");
+    grid.classList.remove("hidden");
 
     if (res.ok) {
       state.total = res.data.total;
-      elements.statInstances.textContent = state.total;
-      renderMetaText();
+      document.getElementById("stat-instances").textContent = state.total;
+      document.getElementById("results-count").textContent =
+        `Знайдено серверів: ${state.total}`;
       renderInstances(res.data.results);
       renderPagination(res.data.total, res.data.page, res.data.limit);
     } else {
-      showError(res.status, res.data?.error);
+      showCatalogError(res.status, res.data?.error);
     }
-  } catch (err) {
-    showLoading(false);
-    showError(0, {
-      code: 'network_error',
-      message: 'Не вдалося зʼєднатися з сервером API. Переконайтесь, що Django бекенд запущений на порту 8000.',
-      details: { hint: 'Запустіть: python manage.py runserver у бекенд-репозиторії' },
+  } catch {
+    spinner.classList.add("hidden");
+    showCatalogError(0, {
+      code: "network_error",
+      message: "Не вдалося з'єднатися з сервером API (:8000). Переконайтесь, що бекенд запущений.",
+      details: {},
     });
   }
 }
 
-function renderMetaText() {
-  elements.resultsCount.textContent = `Знайдено серверів: ${state.total}`;
-
-  const filters = [];
-  if (state.search) filters.push(`«${state.search}»`);
-  if (state.category) filters.push(categoryLabels[state.category] || state.category);
-  if (state.datacenter_id) {
-    const text = elements.datacenterSelect.options[elements.datacenterSelect.selectedIndex]?.text;
-    if (text) filters.push(text);
-  }
-  if (state.vendor_id) {
-    const text = elements.vendorSelect.options[elements.vendorSelect.selectedIndex]?.text;
-    if (text) filters.push(text);
-  }
-
-  elements.activeFiltersInfo.textContent = filters.length ? `Фільтри: ${filters.join(' • ')}` : '';
-}
-
 function renderInstances(instances) {
+  const grid = document.getElementById("instances-grid");
+  const emptyState = document.getElementById("empty-state");
+  const pagination = document.getElementById("pagination");
+
   if (!instances || instances.length === 0) {
-    elements.emptyState.classList.remove('hidden');
-    elements.pagination.classList.add('hidden');
+    grid.innerHTML = "";
+    emptyState.classList.remove("hidden");
+    pagination.classList.add("hidden");
     return;
   }
 
-  elements.emptyState.classList.add('hidden');
-  elements.instancesGrid.innerHTML = instances
+  emptyState.classList.add("hidden");
+  grid.innerHTML = instances
     .map((item) => {
-      const gpuText = item.gpu_model
-        ? `${item.gpu_count} × ${item.gpu_model}`
-        : 'Немає (CPU)';
-      const gpuClass = item.gpu_model ? 'gpu-val' : '';
+      const gpuText = item.gpu_model ?
+        `${item.gpu_count} × ${item.gpu_model}` :
+        "Немає (CPU)";
+      const gpuClass = item.gpu_model ? "gpu-val" : "";
       const catClass = `badge-${item.category}`;
       const catLabel = categoryLabels[item.category] || item.category;
-      const availClass = item.is_available ? 'badge-available' : 'badge-unavailable';
-      const availLabel = item.is_available ? 'Доступний' : 'Орендовано';
+      const availClass = item.is_available ?
+        "badge-available" :
+        "badge-unavailable";
+      const availLabel = item.is_available ? "Доступний" : "Орендовано";
 
       return `
         <article class="instance-card">
@@ -275,288 +943,212 @@ function renderInstances(instances) {
         </article>
       `;
     })
-    .join('');
+    .join("");
 
-  // Attach click listeners to cards
-  elements.instancesGrid.querySelectorAll('.btn-details').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      openDetailModal(btn.dataset.id);
-    });
+  grid.querySelectorAll(".btn-details").forEach((btn) => {
+    btn.addEventListener("click", () => openDetailModal(btn.dataset.id));
   });
 }
 
 function renderPagination(total, page, limit) {
+  const pagination = document.getElementById("pagination");
   const totalPages = Math.ceil(total / limit) || 1;
   if (totalPages <= 1) {
-    elements.pagination.classList.add('hidden');
+    pagination.classList.add("hidden");
     return;
   }
 
-  elements.pagination.classList.remove('hidden');
-  elements.pageInfo.textContent = `Сторінка ${page} з ${totalPages}`;
-  elements.prevPage.disabled = page <= 1;
-  elements.nextPage.disabled = page >= totalPages;
+  pagination.classList.remove("hidden");
+  document.getElementById("page-info").textContent =
+    `Сторінка ${page} з ${totalPages}`;
+  document.getElementById("prev-page").disabled = page <= 1;
+  document.getElementById("next-page").disabled = page >= totalPages;
 }
 
-// --- Modal Details ---------------------------------------------------------
+function showCatalogError(status, errorObj) {
+  const box = document.getElementById("error-box");
+  box.classList.remove("hidden");
+  document.getElementById("error-status").textContent = status ?
+    `HTTP ${status}` :
+    "NETWORK ERROR";
+  document.getElementById("error-code").textContent = errorObj?.code || "error";
+  document.getElementById("error-message").textContent =
+    errorObj?.message || "Виникла помилка.";
+  const detailsEl = document.getElementById("error-details");
+  if (errorObj?.details && Object.keys(errorObj.details).length > 0) {
+    detailsEl.classList.remove("hidden");
+    detailsEl.textContent = JSON.stringify(errorObj.details, null, 2);
+  } else {
+    detailsEl.classList.add("hidden");
+  }
+}
 
 async function openDetailModal(id) {
-  try {
-    const res = await apiRequest(`/instances/${id}`);
-    if (!res.ok) {
-      alert(`Не вдалося завантажити деталі сервера: ${res.data?.error?.message || 'Помилка'}`);
-      return;
-    }
+  const res = await apiRequest(`/instances/${id}`);
+  if (!res.ok) return;
 
-    const item = res.data;
-    elements.modalCategory.textContent = categoryLabels[item.category] || item.category;
-    elements.modalName.textContent = item.name;
-    elements.modalDescription.textContent = item.description || 'Опис конфігурації сервера відсутній.';
-    elements.modalVcpu.textContent = `${item.vcpu} ядер`;
-    elements.modalRam.textContent = `${item.ram_gb} GB`;
-    elements.modalGpu.textContent = item.gpu_model
-      ? `${item.gpu_count} × ${item.gpu_model}`
-      : 'Відсутній (CPU only)';
-    elements.modalStorage.textContent = `${item.storage_size_gb} GB (${item.storage_type})`;
-    elements.modalNetwork.textContent = `${item.network_bandwidth_gbps} Gbps`;
-    elements.modalPrice.textContent = `$${item.hourly_price} / год`;
+  const item = res.data;
+  document.getElementById("modal-category").textContent =
+    categoryLabels[item.category] || item.category;
+  document.getElementById("modal-name").textContent = item.name;
+  document.getElementById("modal-description").textContent =
+    item.description || "Опис конфігурації сервера відсутній.";
+  document.getElementById("modal-vcpu").textContent = `${item.vcpu} ядер`;
+  document.getElementById("modal-ram").textContent = `${item.ram_gb} GB`;
+  document.getElementById("modal-gpu").textContent = item.gpu_model ?
+    `${item.gpu_count} × ${item.gpu_model}` :
+    "Відсутній (CPU only)";
+  document.getElementById("modal-storage").textContent =
+    `${item.storage_size_gb} GB (${item.storage_type})`;
+  document.getElementById("modal-network").textContent =
+    `${item.network_bandwidth_gbps} Gbps`;
+  document.getElementById("modal-price").textContent = `$${item.hourly_price} / год`;
+  document.getElementById("modal-dc-name").textContent = item.datacenter.name;
+  document.getElementById("modal-dc-location").textContent =
+    `${item.datacenter.city}, ${item.datacenter.country} (${item.datacenter.region_code})`;
+  document.getElementById("modal-vendor-name").textContent = item.vendor.name;
+  document.getElementById("modal-vendor-arch").textContent =
+    item.vendor.architecture;
+  document.getElementById("modal-availability").innerHTML = item.is_available ?
+    '<span class="badge badge-available">Вільний для бронювання</span>' :
+    '<span class="badge badge-unavailable">Тимчасово недоступний</span>';
 
-    elements.modalDcName.textContent = item.datacenter.name;
-    elements.modalDcLocation.textContent = `${item.datacenter.city}, ${item.datacenter.country} (${item.datacenter.region_code})`;
-
-    elements.modalVendorName.textContent = item.vendor.name;
-    elements.modalVendorArch.textContent = item.vendor.architecture;
-
-    if (item.is_available) {
-      elements.modalAvailability.innerHTML = '<span class="badge badge-available">Вільний для бронювання</span>';
-    } else {
-      elements.modalAvailability.innerHTML = '<span class="badge badge-unavailable">Тимчасово недоступний</span>';
-    }
-
-    elements.modalBackdrop.classList.remove('hidden');
-  } catch (err) {
-    console.error('Failed to open modal:', err);
-  }
+  document.getElementById("modal-backdrop").classList.remove("hidden");
 }
 
 function closeModal() {
-  elements.modalBackdrop.classList.add('hidden');
+  document.getElementById("modal-backdrop").classList.add("hidden");
 }
 
-// --- Loading & Error UI ----------------------------------------------------
-
-function showLoading(show) {
-  if (show) {
-    elements.loadingSpinner.classList.remove('hidden');
-    elements.instancesGrid.classList.add('hidden');
-  } else {
-    elements.loadingSpinner.classList.add('hidden');
-    elements.instancesGrid.classList.remove('hidden');
-  }
-}
-
-function showError(status, errorObj) {
-  elements.errorBox.classList.remove('hidden');
-  elements.errorStatus.textContent = status ? `HTTP ${status}` : 'NETWORK ERROR';
-  elements.errorCode.textContent = errorObj?.code || 'error';
-  elements.errorMessage.textContent = errorObj?.message || 'Виникла непередбачена помилка.';
-
-  if (errorObj?.details && Object.keys(errorObj.details).length > 0) {
-    elements.errorDetails.classList.remove('hidden');
-    elements.errorDetails.textContent = JSON.stringify(errorObj.details, null, 2);
-  } else {
-    elements.errorDetails.classList.add('hidden');
-  }
-}
-
-function hideError() {
-  elements.errorBox.classList.add('hidden');
-}
-
-// --- Interactive CORS Demo -------------------------------------------------
-
-async function runDemo(demoType) {
-  elements.demoOutputContainer.classList.remove('hidden');
-  elements.demoResponseJson.textContent = 'Виконується HTTP запит...';
-  elements.demoStatusPill.textContent = 'WAIT';
-  elements.demoStatusPill.className = 'status-tag';
-
-  let reqMethod = 'GET';
-  let reqPath = '';
-  let options = {};
-
-  if (demoType === 'conflict') {
-    // 409 Conflict: trying to delete datacenter #1 which has instances
-    reqMethod = 'DELETE';
-    reqPath = '/datacenters/1';
-    options = { method: 'DELETE' };
-    elements.demoRequestInfo.textContent = 'DELETE /api/v1/datacenters/1';
-  } else if (demoType === 'validation') {
-    // 400 Bad Request: SLA > 100
-    reqMethod = 'POST';
-    reqPath = '/datacenters';
-    options = {
-      method: 'POST',
-      body: JSON.stringify({
-        name: 'test-dc-invalid',
-        region_code: 'eu-west-1',
-        city: 'Kyiv',
-        country: 'Ukraine',
-        sla_percent: '150.00',
-      }),
-    };
-    elements.demoRequestInfo.textContent = 'POST /api/v1/datacenters (sla_percent=150.00)';
-  } else if (demoType === 'notfound') {
-    // 404 Not Found
-    reqMethod = 'GET';
-    reqPath = '/instances/9999';
-    options = { method: 'GET' };
-    elements.demoRequestInfo.textContent = 'GET /api/v1/instances/9999';
-  }
-
-  try {
-    const res = await apiRequest(reqPath, options);
-    elements.demoStatusPill.textContent = `HTTP ${res.status}`;
-
-    if (res.status === 409) {
-      elements.demoStatusPill.className = 'status-tag pill-409';
-    } else if (res.status === 400) {
-      elements.demoStatusPill.className = 'status-tag pill-400';
-    } else if (res.status === 404) {
-      elements.demoStatusPill.className = 'status-tag pill-404';
-    } else {
-      elements.demoStatusPill.className = 'status-tag';
+function setupCatalogAndNavigationEvents() {
+  // Intercept internal route links
+  document.addEventListener("click", (e) => {
+    const routeLink = e.target.closest("[data-route]");
+    if (routeLink) {
+      e.preventDefault();
+      navigateTo(routeLink.getAttribute("href") || routeLink.dataset.route);
     }
+  });
 
-    elements.demoResponseJson.textContent = JSON.stringify(res.data, null, 2);
-  } catch (err) {
-    elements.demoStatusPill.textContent = 'NETWORK FAIL';
-    elements.demoStatusPill.className = 'status-tag pill-400';
-    elements.demoResponseJson.textContent = `Помилка запиту: ${err.message}`;
-  }
-}
+  window.addEventListener("popstate", () => {
+    navigateTo(window.location.pathname + window.location.search, {
+      replace: true,
+    });
+  });
 
-// --- Event Handlers --------------------------------------------------------
+  document
+    .getElementById("route-banner-close")
+    .addEventListener("click", hideRouteBanner);
 
-function setupEvents() {
-  // Search with debounce
+  // Search input
   let searchTimeout;
-  elements.searchInput.addEventListener('input', (e) => {
+  const searchInput = document.getElementById("search-input");
+  const searchClear = document.getElementById("search-clear");
+
+  searchInput.addEventListener("input", (e) => {
     clearTimeout(searchTimeout);
-    const value = e.target.value;
-    elements.searchClear.classList.toggle('hidden', !value);
+    const val = e.target.value;
+    searchClear.classList.toggle("hidden", !val);
     searchTimeout = setTimeout(() => {
-      state.search = value;
+      state.search = val;
       state.page = 1;
       loadInstances();
     }, 300);
   });
 
-  elements.searchClear.addEventListener('click', () => {
-    elements.searchInput.value = '';
-    elements.searchClear.classList.add('hidden');
-    state.search = '';
+  searchClear.addEventListener("click", () => {
+    searchInput.value = "";
+    searchClear.classList.add("hidden");
+    state.search = "";
     state.page = 1;
     loadInstances();
   });
 
-  // Category Tabs
-  elements.categoryTabs.querySelectorAll('.tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      elements.categoryTabs.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
+  document.querySelectorAll("#category-tabs .tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document
+        .querySelectorAll("#category-tabs .tab-btn")
+        .forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
       state.category = btn.dataset.category;
       state.page = 1;
       loadInstances();
     });
   });
 
-  // Select Filters
-  elements.datacenterSelect.addEventListener('change', (e) => {
-    state.datacenter_id = e.target.value;
-    state.page = 1;
-    loadInstances();
-  });
+  document
+    .getElementById("datacenter-select")
+    .addEventListener("change", (e) => {
+      state.datacenter_id = e.target.value;
+      state.page = 1;
+      loadInstances();
+    });
 
-  elements.vendorSelect.addEventListener('change', (e) => {
+  document.getElementById("vendor-select").addEventListener("change", (e) => {
     state.vendor_id = e.target.value;
     state.page = 1;
     loadInstances();
   });
 
-  elements.sortSelect.addEventListener('change', (e) => {
+  document.getElementById("sort-select").addEventListener("change", (e) => {
     state.sort = e.target.value;
     state.page = 1;
     loadInstances();
   });
 
-  // Reset Filters
   function resetAllFilters() {
-    state.search = '';
-    state.category = '';
-    state.datacenter_id = '';
-    state.vendor_id = '';
-    state.sort = '';
+    state.search = "";
+    state.category = "";
+    state.datacenter_id = "";
+    state.vendor_id = "";
+    state.sort = "";
     state.page = 1;
-
-    elements.searchInput.value = '';
-    elements.searchClear.classList.add('hidden');
-    elements.categoryTabs.querySelectorAll('.tab-btn').forEach((b, idx) => {
-      b.classList.toggle('active', idx === 0);
-    });
-    elements.datacenterSelect.value = '';
-    elements.vendorSelect.value = '';
-    elements.sortSelect.value = '';
-
+    searchInput.value = "";
+    searchClear.classList.add("hidden");
+    document
+      .querySelectorAll("#category-tabs .tab-btn")
+      .forEach((b, idx) => b.classList.toggle("active", idx === 0));
+    document.getElementById("datacenter-select").value = "";
+    document.getElementById("vendor-select").value = "";
+    document.getElementById("sort-select").value = "";
     loadInstances();
   }
 
-  elements.resetFilters.addEventListener('click', resetAllFilters);
-  elements.emptyResetBtn.addEventListener('click', resetAllFilters);
-  elements.retryBtn.addEventListener('click', loadInstances);
+  document
+    .getElementById("reset-filters")
+    .addEventListener("click", resetAllFilters);
+  document
+    .getElementById("empty-reset-btn")
+    .addEventListener("click", resetAllFilters);
+  document.getElementById("retry-btn").addEventListener("click", loadInstances);
 
-  // Pagination
-  elements.prevPage.addEventListener('click', () => {
+  document.getElementById("prev-page").addEventListener("click", () => {
     if (state.page > 1) {
       state.page--;
       loadInstances();
-      window.scrollTo({ top: 300, behavior: 'smooth' });
     }
   });
 
-  elements.nextPage.addEventListener('click', () => {
+  document.getElementById("next-page").addEventListener("click", () => {
     const totalPages = Math.ceil(state.total / state.limit);
     if (state.page < totalPages) {
       state.page++;
       loadInstances();
-      window.scrollTo({ top: 300, behavior: 'smooth' });
     }
   });
 
-  // Modal Close
-  elements.modalClose.addEventListener('click', closeModal);
-  elements.modalCloseFooter.addEventListener('click', closeModal);
-  elements.modalBackdrop.addEventListener('click', (e) => {
-    if (e.target === elements.modalBackdrop) closeModal();
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !elements.modalBackdrop.classList.contains('hidden')) {
-      closeModal();
-    }
-  });
-
-  // Demo Buttons
-  document.querySelectorAll('.btn-demo').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      runDemo(btn.dataset.demo);
-    });
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document
+    .getElementById("modal-close-footer")
+    .addEventListener("click", closeModal);
+  document.getElementById("modal-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "modal-backdrop") closeModal();
   });
 }
 
 function escapeHtml(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
+  if (!str) return "";
+  const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
 }
@@ -564,10 +1156,20 @@ function escapeHtml(str) {
 // --- Initialization --------------------------------------------------------
 
 async function init() {
-  setupEvents();
+  updateNavbarAuthUI();
+  setupCatalogAndNavigationEvents();
+  setupAuthForms();
+  setupWorkspaceActions();
+  setupAdminForm();
+
   await checkApiConnection();
   await loadMetadata();
   await loadInstances();
+
+  // Resolve initial route with auth guards
+  await navigateTo(window.location.pathname + window.location.search, {
+    replace: true,
+  });
 }
 
 init();

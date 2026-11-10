@@ -3,195 +3,559 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SkyCompute — Каталог серверів та GPU</title>
+  <title>SkyCompute — Хмарна платформа оренди серверів та GPU</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
-  <!-- Header -->
+  <!-- Header / Navbar -->
   <header class="navbar">
     <div class="container nav-content">
-      <div class="brand">
-        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
-        </svg>
-        <div class="brand-text">
-          <span class="brand-title">SkyCompute</span>
-          <span class="brand-tag">Cloud & GPU Platform</span>
-        </div>
+      <div class="nav-left">
+        <a href="/catalog" data-route="/catalog" class="brand">
+          <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+          </svg>
+          <div class="brand-text">
+            <span class="brand-title">SkyCompute</span>
+            <span class="brand-tag">Cloud &amp; GPU Platform</span>
+          </div>
+        </a>
+
+        <nav class="main-nav">
+          <a href="/catalog" data-route="/catalog" class="nav-link active">Каталог (Публічний)</a>
+          <a href="/workspace" data-route="/workspace" class="nav-link">Кабінет (Авторизованим)</a>
+          <a href="/admin-panel" data-route="/admin-panel" class="nav-link">Інфраструктура (Admin)</a>
+        </nav>
       </div>
 
-      <div class="nav-badges">
-        <div class="status-badge" id="api-status" title="Перевірка доступності Django API">
+      <div class="nav-right">
+        <div class="status-badge" id="api-status" title="Статус з'єднання з Django API (:8000)">
           <span class="status-dot"></span>
-          <span class="status-text">Підключення до API...</span>
+          <span class="status-text">API...</span>
         </div>
-        <span class="port-badge">Frontend :3000 ⇄ API :8000</span>
+
+        <!-- Visible ONLY when unauthenticated -->
+        <div id="nav-guest" class="auth-controls">
+          <a href="/login" data-route="/login" id="nav-login-btn" class="btn btn-primary">Увійти</a>
+          <a href="/register" data-route="/register" id="nav-register-btn" class="btn btn-secondary">Реєстрація</a>
+        </div>
+
+        <!-- Visible ONLY when authenticated -->
+        <div id="nav-user" class="auth-controls hidden">
+          <div class="user-chip">
+            <span id="nav-user-name" class="user-name"></span>
+            <span id="nav-user-role" class="role-badge"></span>
+          </div>
+          <button id="logout-btn" type="button" class="btn btn-danger-outline">Вийти</button>
+        </div>
       </div>
     </div>
   </header>
 
-  <!-- Main Container -->
+  <!-- Global Notification / Redirect Banner -->
+  <div class="container">
+    <div id="route-banner" class="route-banner hidden">
+      <span id="route-banner-text"></span>
+      <button id="route-banner-close" type="button" class="banner-close">✕</button>
+    </div>
+  </div>
+
+  <!-- Main Content -->
   <main class="container main-content">
-    <!-- Hero / Info Banner -->
-    <section class="hero-banner">
-      <div class="hero-text">
-        <h1>Каталог хмарних серверних потужностей</h1>
-        <p>
-          Демонстраційний клієнт SkyCompute. Запущений на окремому порту <code>:3000</code>
-          та успішно взаємодіє з бекендом Django REST framework на <code>:8000</code> через CORS.
+    <!-- ==================== PAGE 1: PUBLIC CATALOG ==================== -->
+    <div id="page-catalog" class="page-view">
+      <section class="hero-banner">
+        <div class="hero-text">
+          <h1>Каталог хмарних серверних потужностей</h1>
+          <p>
+            Публічна сторінка, доступна всім відвідувачам без авторизації.
+            Для додавання серверів або редагування профілю перейдіть у
+            <a href="/workspace" data-route="/workspace" class="inline-link">Кабінет користувача</a>.
+          </p>
+        </div>
+        <div class="hero-stats">
+          <div class="stat-box">
+            <span class="stat-number" id="stat-instances">—</span>
+            <span class="stat-label">Серверів</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-number" id="stat-datacenters">—</span>
+            <span class="stat-label">Датацентрів</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-number" id="stat-vendors">—</span>
+            <span class="stat-label">Вендорів</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Filters & Search Toolbar -->
+      <section class="toolbar">
+        <div class="search-box">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input
+            type="text"
+            id="search-input"
+            placeholder="Пошук за назвою інстансу або моделлю GPU (наприклад, a100, arm)..."
+          />
+          <button id="search-clear" class="btn-clear hidden" title="Очистити">✕</button>
+        </div>
+
+        <div class="filters-row">
+          <div class="category-tabs" id="category-tabs">
+            <button class="tab-btn active" data-category="">Всі категорії</button>
+            <button class="tab-btn" data-category="general">General</button>
+            <button class="tab-btn" data-category="compute_optimized">Compute-Optimized</button>
+            <button class="tab-btn" data-category="accelerator_optimized">GPU / AI</button>
+          </div>
+
+          <div class="select-group">
+            <select id="datacenter-select">
+              <option value="">Всі датацентри</option>
+            </select>
+
+            <select id="vendor-select">
+              <option value="">Всі вендори</option>
+            </select>
+
+            <select id="sort-select">
+              <option value="">Сортування: за замовчуванням</option>
+              <option value="price">Ціна: від найдешевших</option>
+              <option value="-price">Ціна: від найдорожчих</option>
+              <option value="-ram_gb">RAM: від найбільшого</option>
+              <option value="ram_gb">RAM: від найменшого</option>
+            </select>
+
+            <button id="reset-filters" class="btn btn-secondary">Скинути</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Catalog Results Section -->
+      <section class="catalog-section">
+        <div class="results-meta">
+          <span id="results-count" class="results-text">Завантаження каталогу...</span>
+          <span id="active-filters-info" class="active-filters-text"></span>
+        </div>
+
+        <div id="loading-spinner" class="spinner-container">
+          <div class="spinner"></div>
+          <p>Отримання даних із <code>http://127.0.0.1:8000/api/v1/instances</code>...</p>
+        </div>
+
+        <div id="error-box" class="error-box hidden">
+          <div class="error-header">
+            <span class="error-badge" id="error-status">ERROR</span>
+            <span class="error-code" id="error-code"></span>
+          </div>
+          <p class="error-message" id="error-message"></p>
+          <pre class="error-details" id="error-details"></pre>
+          <button id="retry-btn" class="btn btn-primary">Повторити спробу</button>
+        </div>
+
+        <div id="instances-grid" class="instances-grid"></div>
+
+        <div id="empty-state" class="empty-state hidden">
+          <h3>За вашим запитом серверів не знайдено</h3>
+          <p>Спробуйте змінити пошуковий запит або скинути фільтри.</p>
+          <button id="empty-reset-btn" class="btn btn-secondary">Скинути всі фільтри</button>
+        </div>
+
+        <div id="pagination" class="pagination hidden">
+          <button id="prev-page" class="btn btn-secondary" disabled>← Попередня</button>
+          <span id="page-info" class="page-info">Сторінка 1</span>
+          <button id="next-page" class="btn btn-secondary">Наступна →</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== PAGE 2: LOGIN ==================== -->
+    <div id="page-login" class="page-view hidden">
+      <div class="auth-card">
+        <div class="auth-card-header">
+          <h1>Вхід в акаунт</h1>
+          <p id="login-redirect-hint" class="auth-subtitle">
+            Увійдіть, щоб керувати серверами та переглядати особистий кабінет.
+          </p>
+        </div>
+
+        <div id="login-error-alert" class="form-alert alert-error hidden"></div>
+
+        <form id="login-form" novalidate>
+          <div class="form-field">
+            <label for="login-username">Ім'я користувача (username) *</label>
+            <input
+              type="text"
+              id="login-username"
+              name="username"
+              maxlength="150"
+              required
+              autocomplete="username"
+              placeholder="Наприклад, developer або admin"
+            />
+            <span class="field-error" data-error-for="login-username"></span>
+          </div>
+
+          <div class="form-field">
+            <label for="login-password">Пароль *</label>
+            <input
+              type="password"
+              id="login-password"
+              name="password"
+              maxlength="128"
+              required
+              autocomplete="current-password"
+              placeholder="Введіть пароль"
+            />
+            <span class="field-error" data-error-for="login-password"></span>
+          </div>
+
+          <button type="submit" id="login-submit-btn" class="btn btn-primary btn-block">
+            Увійти з JWT
+          </button>
+        </form>
+
+        <div class="demo-credentials-box">
+          <span class="demo-credentials-title">Швидке заповнення демо-акаунтів (з фікстури sample_data):</span>
+          <div class="demo-credentials-buttons">
+            <button type="button" class="btn btn-secondary btn-sm" id="fill-user-btn">
+              👤 Розробник (developer / DevPass123!)
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" id="fill-admin-btn">
+              🛡️ Адмін (admin / AdminPass123!)
+            </button>
+          </div>
+        </div>
+
+        <p class="auth-switch">
+          Ще не маєте акаунта?
+          <a href="/register" data-route="/register" class="inline-link">Зареєструватися</a>
         </p>
       </div>
-      <div class="hero-stats">
-        <div class="stat-box">
-          <span class="stat-number" id="stat-instances">—</span>
-          <span class="stat-label">Серверів</span>
-        </div>
-        <div class="stat-box">
-          <span class="stat-number" id="stat-datacenters">—</span>
-          <span class="stat-label">Датацентрів</span>
-        </div>
-        <div class="stat-box">
-          <span class="stat-number" id="stat-vendors">—</span>
-          <span class="stat-label">Вендорів</span>
-        </div>
-      </div>
-    </section>
+    </div>
 
-    <!-- Filters & Search Toolbar -->
-    <section class="toolbar">
-      <div class="search-box">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="11" cy="11" r="8"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-        </svg>
-        <input
-          type="text"
-          id="search-input"
-          placeholder="Пошук за назвою інстансу або моделлю GPU (наприклад, a100, arm)..."
-        />
-        <button id="search-clear" class="btn-clear hidden" title="Очистити">✕</button>
-      </div>
-
-      <div class="filters-row">
-        <!-- Category Pills -->
-        <div class="category-tabs" id="category-tabs">
-          <button class="tab-btn active" data-category="">Всі категорії</button>
-          <button class="tab-btn" data-category="general">General</button>
-          <button class="tab-btn" data-category="compute_optimized">Compute-Optimized</button>
-          <button class="tab-btn" data-category="accelerator_optimized">GPU / AI</button>
+    <!-- ==================== PAGE 3: REGISTER ==================== -->
+    <div id="page-register" class="page-view hidden">
+      <div class="auth-card auth-card-wide">
+        <div class="auth-card-header">
+          <h1>Реєстрація нового користувача</h1>
+          <p class="auth-subtitle">
+            Поля позначені <code>*</code> є обов'язковими. Пароль зберігається на сервері у захешованому вигляді (PBKDF2).
+          </p>
         </div>
 
-        <!-- Dropdowns -->
-        <div class="select-group">
-          <select id="datacenter-select">
-            <option value="">Всі датацентри</option>
-          </select>
+        <div id="register-error-alert" class="form-alert alert-error hidden"></div>
+        <div id="register-success-alert" class="form-alert alert-success hidden"></div>
 
-          <select id="vendor-select">
-            <option value="">Всі вендори</option>
-          </select>
+        <form id="register-form" novalidate>
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label for="reg-username">Username *</label>
+              <input
+                type="text"
+                id="reg-username"
+                name="username"
+                maxlength="150"
+                required
+                placeholder="ml_engineer (до 150 символів)"
+              />
+              <span class="field-error" data-error-for="reg-username"></span>
+            </div>
 
-          <select id="sort-select">
-            <option value="">Сортування: за замовчуванням</option>
-            <option value="price">Ціна: від найдешевших</option>
-            <option value="-price">Ціна: від найдорожчих</option>
-            <option value="-ram_gb">RAM: від найбільшого</option>
-            <option value="ram_gb">RAM: від найменшого</option>
-          </select>
+            <div class="form-field">
+              <label for="reg-email">Email *</label>
+              <input
+                type="email"
+                id="reg-email"
+                name="email"
+                maxlength="254"
+                required
+                placeholder="name@example.com"
+              />
+              <span class="field-error" data-error-for="reg-email"></span>
+            </div>
 
-          <button id="reset-filters" class="btn btn-secondary">Скинути</button>
-        </div>
-      </div>
-    </section>
+            <div class="form-field">
+              <label for="reg-first-name">Ім'я (first name, необов'язково)</label>
+              <input
+                type="text"
+                id="reg-first-name"
+                name="first_name"
+                maxlength="150"
+                placeholder="Тарас (можна залишити порожнім)"
+              />
+              <span class="field-error" data-error-for="reg-first-name"></span>
+            </div>
 
-    <!-- Catalog Results Section -->
-    <section class="catalog-section">
-      <div class="results-meta">
-        <span id="results-count" class="results-text">Завантаження каталогу...</span>
-        <span id="active-filters-info" class="active-filters-text"></span>
-      </div>
+            <div class="form-field">
+              <label for="reg-last-name">Прізвище (last name, необов'язково)</label>
+              <input
+                type="text"
+                id="reg-last-name"
+                name="last_name"
+                maxlength="150"
+                placeholder="Шевченко (можна залишити порожнім)"
+              />
+              <span class="field-error" data-error-for="reg-last-name"></span>
+            </div>
 
-      <!-- Loading State -->
-      <div id="loading-spinner" class="spinner-container">
-        <div class="spinner"></div>
-        <p>Отримання даних через CORS із <code>http://127.0.0.1:8000/api/v1/instances</code>...</p>
-      </div>
+            <div class="form-field">
+              <label for="reg-password">Пароль * (мін. 8 символів, літери + цифри)</label>
+              <input
+                type="password"
+                id="reg-password"
+                name="password"
+                minlength="8"
+                maxlength="128"
+                required
+                placeholder="Щонайменше 8 символів"
+              />
+              <span class="field-error" data-error-for="reg-password"></span>
+            </div>
 
-      <!-- Error Message Box -->
-      <div id="error-box" class="error-box hidden">
-        <div class="error-header">
-          <span class="error-badge" id="error-status">ERROR</span>
-          <span class="error-code" id="error-code"></span>
-        </div>
-        <p class="error-message" id="error-message"></p>
-        <pre class="error-details" id="error-details"></pre>
-        <button id="retry-btn" class="btn btn-primary">Повторити спробу</button>
-      </div>
-
-      <!-- Instances Grid -->
-      <div id="instances-grid" class="instances-grid"></div>
-
-      <!-- Empty State -->
-      <div id="empty-state" class="empty-state hidden">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon">
-          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-          <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-          <line x1="6" y1="6" x2="6.01" y2="6"></line>
-          <line x1="6" y1="18" x2="6.01" y2="18"></line>
-        </svg>
-        <h3>За вашим запитом серверів не знайдено</h3>
-        <p>Спробуйте змінити пошуковий запит або скинути фільтри.</p>
-        <button id="empty-reset-btn" class="btn btn-secondary">Скинути всі фільтри</button>
-      </div>
-
-      <!-- Pagination -->
-      <div id="pagination" class="pagination hidden">
-        <button id="prev-page" class="btn btn-secondary" disabled>← Попередня</button>
-        <span id="page-info" class="page-info">Сторінка 1</span>
-        <button id="next-page" class="btn btn-secondary">Наступна →</button>
-      </div>
-    </section>
-
-    <!-- Interactive CORS & Error-Handling Demo -->
-    <section class="demo-section">
-      <div class="demo-card">
-        <div class="demo-header">
-          <div>
-            <h2>🧪 Демонстрація CORS та єдиного формату помилок</h2>
-            <p>
-              Натисніть кнопку нижче, щоб відправити запит до бекенду і наживо побачити,
-              як спрацьовує CORS та як бекенд повертає структуровану помилку:
-            </p>
+            <div class="form-field">
+              <label for="reg-password-confirm">Підтвердження пароля *</label>
+              <input
+                type="password"
+                id="reg-password-confirm"
+                name="password_confirmation"
+                minlength="8"
+                maxlength="128"
+                required
+                placeholder="Повторіть пароль"
+              />
+              <span class="field-error" data-error-for="reg-password-confirm"></span>
+            </div>
           </div>
+
+          <button type="submit" id="register-submit-btn" class="btn btn-primary btn-block">
+            Створити акаунт
+          </button>
+        </form>
+
+        <p class="auth-switch">
+          Вже маєте акаунт?
+          <a href="/login" data-route="/login" class="inline-link">Увійти</a>
+        </p>
+      </div>
+    </div>
+
+    <!-- ==================== PAGE 4: PROTECTED WORKSPACE ==================== -->
+    <div id="page-workspace" class="page-view hidden">
+      <section class="hero-banner">
+        <div class="hero-text">
+          <h1>Кабінет авторизованого користувача</h1>
+          <p>
+            Ця сторінка захищена: неавторизованих відвідувачів автоматично перенаправляє на
+            <code>/login</code>, а після успішного входу повертає сюди.
+          </p>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <!-- Profile Card -->
+        <div class="panel-card">
+          <h2>👤 Профіль користувача (<code>GET / PATCH /api/v1/users/me</code>)</h2>
+          <p class="panel-desc">Дані отримані з захищеного ендпоінту за допомогою JWT access-токена.</p>
+
+          <div id="profile-alert" class="form-alert hidden"></div>
+
+          <form id="profile-form" novalidate>
+            <div class="form-field">
+              <label>Username та Роль</label>
+              <input type="text" id="prof-username-role" disabled />
+            </div>
+            <div class="form-field">
+              <label for="prof-email">Email *</label>
+              <input type="email" id="prof-email" maxlength="254" required />
+            </div>
+            <div class="form-grid-2">
+              <div class="form-field">
+                <label for="prof-first-name">Ім'я</label>
+                <input type="text" id="prof-first-name" maxlength="150" />
+              </div>
+              <div class="form-field">
+                <label for="prof-last-name">Прізвище</label>
+                <input type="text" id="prof-last-name" maxlength="150" />
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Зберегти зміни профілю</button>
+          </form>
         </div>
 
-        <div class="demo-actions">
-          <button class="btn btn-demo" data-demo="conflict">
-            <span class="demo-pill pill-409">409 Conflict</span>
-            Видалення датацентру із серверами
-          </button>
-          <button class="btn btn-demo" data-demo="validation">
-            <span class="demo-pill pill-400">400 Bad Request</span>
-            Невалідні дані (SLA &gt; 100)
-          </button>
-          <button class="btn btn-demo" data-demo="notfound">
-            <span class="demo-pill pill-404">404 Not Found</span>
-            Неіснуючий сервер (id=9999)
-          </button>
-        </div>
+        <!-- JWT Token Refresh Simulator Card -->
+        <div class="panel-card">
+          <h2>🔄 Керування JWT-токенами та автооновлення (Refresh)</h2>
+          <p class="panel-desc">
+            Коли <code>access</code>-токен закінчується, клієнт автоматично звертається до
+            <code>POST /api/v1/auth/refresh</code> із <code>refresh</code>-токеном і повторює запит без повторного логіну.
+          </p>
 
-        <div id="demo-output-container" class="demo-output-container hidden">
-          <div class="demo-output-header">
-            <span id="demo-request-info" class="request-tag"></span>
-            <span id="demo-status-pill" class="status-tag"></span>
+          <div class="token-status-box">
+            <div><strong>Access токен:</strong> <code id="token-access-preview">—</code></div>
+            <div><strong>Refresh токен:</strong> <code id="token-refresh-preview">—</code></div>
           </div>
-          <pre id="demo-response-json" class="json-viewer"></pre>
+
+          <div class="demo-actions">
+            <button type="button" id="simulate-expired-access-btn" class="btn btn-primary">
+              ⚡ Симулювати прострочений access-токен + виконати запит
+            </button>
+            <button type="button" id="manual-refresh-btn" class="btn btn-secondary">
+              Оновити токен вручну
+            </button>
+          </div>
+
+          <pre id="refresh-log-output" class="json-viewer">Натисніть кнопку вище, щоб протестувати автоматичний refresh access-токена.</pre>
         </div>
       </div>
-    </section>
+
+      <!-- Create Instance Form (Available to any authenticated user) -->
+      <div class="panel-card" style="margin-top: 24px;">
+        <h2>➕ Додати нову конфігурацію сервера (<code>POST /api/v1/instances</code>)</h2>
+        <p class="panel-desc">
+          Створення та редагування серверів доступне всім авторизованим користувачам (ролі <code>user</code> та <code>admin</code>).
+        </p>
+
+        <div id="create-instance-alert" class="form-alert hidden"></div>
+
+        <form id="create-instance-form" novalidate>
+          <div class="form-grid-3">
+            <div class="form-field">
+              <label for="inst-name">Назва конфігурації *</label>
+              <input type="text" id="inst-name" maxlength="64" required placeholder="c3-standard-8" />
+            </div>
+
+            <div class="form-field">
+              <label for="inst-category">Категорія *</label>
+              <select id="inst-category" required>
+                <option value="general">General-Purpose</option>
+                <option value="compute_optimized">Compute-Optimized</option>
+                <option value="accelerator_optimized">Accelerator-Optimized (GPU)</option>
+              </select>
+            </div>
+
+            <div class="form-field">
+              <label for="inst-price">Ціна за годину ($) *</label>
+              <input type="number" id="inst-price" step="0.01" min="0.01" required value="0.45" />
+            </div>
+
+            <div class="form-field">
+              <label for="inst-vcpu">vCPU (ядер) *</label>
+              <input type="number" id="inst-vcpu" min="1" required value="8" />
+            </div>
+
+            <div class="form-field">
+              <label for="inst-ram">RAM (GB) *</label>
+              <input type="number" id="inst-ram" min="1" required value="32" />
+            </div>
+
+            <div class="form-field">
+              <label for="inst-storage-type">Тип диска *</label>
+              <select id="inst-storage-type" required>
+                <option value="SSD">SSD</option>
+                <option value="NVMe SSD">NVMe SSD</option>
+                <option value="HDD">HDD</option>
+              </select>
+            </div>
+
+            <div class="form-field">
+              <label for="inst-storage-size">Обсяг диска (GB) *</label>
+              <input type="number" id="inst-storage-size" min="1" required value="200" />
+            </div>
+
+            <div class="form-field">
+              <label for="inst-bandwidth">Мережа (Gbps) *</label>
+              <input type="number" id="inst-bandwidth" min="1" required value="10" />
+            </div>
+
+            <div class="form-field">
+              <label for="inst-datacenter">Датацентр *</label>
+              <select id="inst-datacenter" required></select>
+            </div>
+
+            <div class="form-field">
+              <label for="inst-vendor">Вендор *</label>
+              <select id="inst-vendor" required></select>
+            </div>
+
+            <div class="form-field">
+              <label for="inst-gpu-model">Модель GPU (необов'язково)</label>
+              <input type="text" id="inst-gpu-model" maxlength="100" placeholder="Напр. NVIDIA L4 24GB" />
+            </div>
+
+            <div class="form-field">
+              <label for="inst-gpu-count">Кількість GPU</label>
+              <input type="number" id="inst-gpu-count" min="0" value="0" />
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label for="inst-description">Опис конфігурації</label>
+            <input type="text" id="inst-description" placeholder="Короткий опис призначення сервера" />
+          </div>
+
+          <button type="submit" class="btn btn-primary">Створити сервер у каталозі</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- ==================== PAGE 5: ADMIN INFRASTRUCTURE PANEL ==================== -->
+    <div id="page-admin" class="page-view hidden">
+      <section class="hero-banner">
+        <div class="hero-text">
+          <h1>🛡️ Адміністрування інфраструктури (Роль Admin)</h1>
+          <p>
+            Керування датацентрами, вендорами та видалення конфігурацій серверів дозволено лише користувачам із роллю
+            <code>admin</code> (<code>is_staff=True</code>). Звичайний авторизований користувач (<code>user</code>) при спробі виконати ці дії отримує <code>403 Forbidden</code>.
+          </p>
+        </div>
+      </section>
+
+      <div id="admin-role-notice" class="form-alert hidden"></div>
+
+      <div class="workspace-grid">
+        <div class="panel-card">
+          <h2>🌍 Додати новий датацентр (<code>POST /api/v1/datacenters</code>)</h2>
+          <p class="panel-desc">Вимагає прав адміністратора (<code>is_staff=True</code>).</p>
+          <div id="admin-dc-alert" class="form-alert hidden"></div>
+
+          <form id="admin-dc-form" novalidate>
+            <div class="form-grid-2">
+              <div class="form-field">
+                <label for="dc-name">Код зони (name) *</label>
+                <input type="text" id="dc-name" maxlength="64" required placeholder="europe-north1-a" />
+              </div>
+              <div class="form-field">
+                <label for="dc-region">Регіон (region_code) *</label>
+                <input type="text" id="dc-region" maxlength="64" required placeholder="europe-north1" />
+              </div>
+              <div class="form-field">
+                <label for="dc-city">Місто *</label>
+                <input type="text" id="dc-city" maxlength="100" required placeholder="Hamina" />
+              </div>
+              <div class="form-field">
+                <label for="dc-country">Країна *</label>
+                <input type="text" id="dc-country" maxlength="100" required placeholder="Finland" />
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Зареєструвати датацентр</button>
+          </form>
+        </div>
+
+        <div class="panel-card">
+          <h2>🗑️ Видалення серверів з каталогу (<code>DELETE /api/v1/instances/{id}</code>)</h2>
+          <p class="panel-desc">Спробуйте видалити сервер під роллю <code>user</code> (отримаєте 403) або <code>admin</code> (204 No Content).</p>
+          <div id="admin-delete-alert" class="form-alert hidden"></div>
+          <div id="admin-instances-list" class="admin-list"></div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <!-- Instance Detail Modal -->
@@ -261,7 +625,7 @@
   <!-- Footer -->
   <footer class="footer">
     <div class="container footer-content">
-      <p>SkyCompute Cloud Services • Лабораторна робота №4 НаУКМА</p>
+      <p>SkyCompute Cloud Services • НаУКМА Вебпрограмування</p>
       <div class="footer-links">
         <a href="http://127.0.0.1:8000/api/v1/instances" target="_blank" rel="noreferrer">Django API (:8000)</a>
         <a href="http://127.0.0.1:8000/admin/" target="_blank" rel="noreferrer">Admin Panel</a>
